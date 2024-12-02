@@ -303,7 +303,7 @@ class FloatingWindowService : Service(), View.OnTouchListener {
      private fun showPopupMenu() {
          val popupMenu = PopupMenu(this, floatingView)
          val idShowRustDesk = 0
-         popupMenu.menu.add(0, idShowRustDesk, 0, translate("Show RustDesk"))
+         popupMenu.menu.add(0, idShowRustDesk, 0, translate("显示 天潮云系统"))
          // For host side, clipboard sync
          val idSyncClipboard = 1
          val isClipboardListenerEnabled = MainActivity.rdClipboardManager?.isListening ?: false
