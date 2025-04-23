@@ -25,9 +25,7 @@ use hbb_common::{
     config::{self, Config, Config2},
     futures::StreamExt as _,
     futures_util::sink::SinkExt,
-    log, password_security as password,
-    sodiumoxide::base64,
-    timeout,
+    log, password_security as password, timeout,
     tokio::{
         self,
         io::{AsyncRead, AsyncWrite},
@@ -190,6 +188,7 @@ pub enum Data {
     Login {
         id: i32,
         is_file_transfer: bool,
+        is_view_camera: bool,
         peer_id: String,
         name: String,
         authorized: bool,
@@ -217,8 +216,6 @@ pub enum Data {
     MouseMoveTime(i64),
     Authorize,
     Close,
-    #[cfg(target_os = "android")]
-    InputControl(bool),
     #[cfg(windows)]
     SAS,
     UserSid(Option<u32>),
@@ -232,7 +229,7 @@ pub enum Data {
     FS(FS),
     Test,
     SyncConfig(Option<Box<(Config, Config2)>>),
-    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[cfg(target_os = "windows")]
     ClipboardFile(ClipboardFile),
     ClipboardFileEnabled(bool),
     #[cfg(target_os = "windows")]
@@ -268,12 +265,15 @@ pub enum Data {
     ControlledSessionCount(usize),
     CmErr(String),
     CheckHwcodec,
+    #[cfg(feature = "flutter")]
     VideoConnCount(Option<usize>),
     // Although the key is not neccessary, it is used to avoid hardcoding the key.
     WaylandScreencastRestoreToken((String, String)),
     HwCodecConfig(Option<String>),
     RemoveTrustedDevices(Vec<Bytes>),
     ClearTrustedDevices,
+    #[cfg(all(target_os = "windows", feature = "flutter"))]
+    PrinterData(Vec<u8>),
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -457,12 +457,13 @@ async fn handle(data: Data, stream: &mut Connection) {
                 log::info!("socks updated");
             }
         },
+        #[cfg(feature = "flutter")]
         Data::VideoConnCount(None) => {
             let n = crate::server::AUTHED_CONNS
                 .lock()
                 .unwrap()
                 .iter()
-                .filter(|x| x.1 == crate::server::AuthConnType::Remote)
+                .filter(|x| x.conn_type == crate::server::AuthConnType::Remote)
                 .count();
             allow_err!(stream.send(&Data::VideoConnCount(Some(n))).await);
         }
@@ -1282,6 +1283,6 @@ mod test {
     #[test]
     fn verify_ffi_enum_data_size() {
         println!("{}", std::mem::size_of::<Data>());
-        assert!(std::mem::size_of::<Data>() < 96);
+        assert!(std::mem::size_of::<Data>() <= 96);
     }
 }

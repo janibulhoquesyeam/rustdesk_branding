@@ -60,7 +60,8 @@ class RustdeskImpl {
     throw UnimplementedError("hostStopSystemKeyPropagate");
   }
 
-  int peerGetDefaultSessionsCount({required String id, dynamic hint}) {
+  int peerGetSessionsCount(
+      {required String id, required int connType, dynamic hint}) {
     return 0;
   }
 
@@ -68,6 +69,7 @@ class RustdeskImpl {
       {required String id,
       required UuidValue sessionId,
       required Int32List displays,
+      required bool isViewCamera,
       dynamic hint}) {
     return '';
   }
@@ -76,6 +78,7 @@ class RustdeskImpl {
       {required UuidValue sessionId,
       required String id,
       required bool isFileTransfer,
+      required bool isViewCamera,
       required bool isPortForward,
       required bool isRdp,
       required String switchUuid,
@@ -90,7 +93,8 @@ class RustdeskImpl {
         'id': id,
         'password': password,
         'is_shared_password': isSharedPassword,
-        'isFileTransfer': isFileTransfer
+        'isFileTransfer': isFileTransfer,
+        'isViewCamera': isViewCamera
       })
     ]);
   }
@@ -1799,6 +1803,26 @@ class RustdeskImpl {
 
   int mainMaxEncryptLen({dynamic hint}) {
     throw UnimplementedError("mainMaxEncryptLen");
+  }
+
+  bool mainAudioSupportLoopback({dynamic hint}) {
+    return false;
+  }
+
+  Future<String> sessionReadLocalEmptyDirsRecursiveSync(
+      {required UuidValue sessionId,
+      required String path,
+      required bool includeHidden,
+      dynamic hint}) {
+    throw UnimplementedError("sessionReadLocalEmptyDirsRecursiveSync");
+  }
+
+  Future<void> sessionReadRemoteEmptyDirsRecursiveSync(
+      {required UuidValue sessionId,
+      required String path,
+      required bool includeHidden,
+      dynamic hint}) {
+    throw UnimplementedError("sessionReadRemoteEmptyDirsRecursiveSync");
   }
 
   Future<void> sessionRenameFile(

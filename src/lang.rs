@@ -33,6 +33,7 @@ mod pl;
 mod ptbr;
 mod ro;
 mod ru;
+mod sc;
 mod sk;
 mod sl;
 mod sq;
@@ -43,6 +44,8 @@ mod tr;
 mod tw;
 mod uk;
 mod vn;
+mod ta;
+mod ge;
 
 pub const LANGS: &[(&str, &str)] = &[
     // ("en", "English"),
@@ -52,6 +55,7 @@ pub const LANGS: &[(&str, &str)] = &[
     // ("nl", "Nederlands"),
     // ("nb", "Norsk bokmål"),
     ("zh-cn", "简体中文"),
+<<<<<<< HEAD
     // ("zh-tw", "繁體中文"),
     // ("pt", "Português"),
     // ("es", "Español"),
@@ -87,6 +91,46 @@ pub const LANGS: &[(&str, &str)] = &[
     // ("ar", "العربية"),
     // ("he", "עברית"),
     // ("hr", "Hrvatski"),
+=======
+    ("zh-tw", "繁體中文"),
+    ("pt", "Português"),
+    ("es", "Español"),
+    ("et", "Eesti keel"),
+    ("eu", "Euskara"),
+    ("hu", "Magyar"),
+    ("bg", "Български"),
+    ("be", "Беларуская"),
+    ("ru", "Русский"),
+    ("sk", "Slovenčina"),
+    ("id", "Indonesia"),
+    ("cs", "Čeština"),
+    ("da", "Dansk"),
+    ("eo", "Esperanto"),
+    ("tr", "Türkçe"),
+    ("vn", "Tiếng Việt"),
+    ("pl", "Polski"),
+    ("ja", "日本語"),
+    ("ko", "한국어"),
+    ("kz", "Қазақ"),
+    ("uk", "Українська"),
+    ("fa", "فارسی"),
+    ("ca", "Català"),
+    ("el", "Ελληνικά"),
+    ("sv", "Svenska"),
+    ("sq", "Shqip"),
+    ("sr", "Srpski"),
+    ("th", "ภาษาไทย"),
+    ("sl", "Slovenščina"),
+    ("ro", "Română"),
+    ("lt", "Lietuvių"),
+    ("lv", "Latviešu"),
+    ("ar", "العربية"),
+    ("he", "עברית"),
+    ("hr", "Hrvatski"),
+    ("sc", "Sardu"),
+    ("ta", "தமிழ்"),
+    ("ge", "ქართული"),
+>>>>>>> upstream/master
 ];
 
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -161,6 +205,9 @@ pub fn translate_locale(name: String, locale: &str) -> String {
         "be" => be::T.deref(),
         "he" => he::T.deref(),
         "hr" => hr::T.deref(),
+        "sc" => sc::T.deref(),
+        "ta" => ta::T.deref(),
+        "ge" => ge::T.deref(),
         _ => en::T.deref(),
     };
     let (name, placeholder_value) = extract_placeholder(&name);

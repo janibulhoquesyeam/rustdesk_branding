@@ -4,6 +4,7 @@ import 'package:auto_size_text_field/auto_size_text_field.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common/formatter/id_formatter.dart';
 import 'package:flutter_hbb/common/widgets/connection_page_title.dart';
+import 'package:flutter_hbb/models/state_model.dart';
 import 'package:get/get.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -40,12 +41,11 @@ class _ConnectionPageState extends State<ConnectionPage> {
   final _idController = IDTextEditingController();
   final RxBool _idEmpty = true.obs;
 
-  /// Update url. If it's not null, means an update is available.
-  var _updateUrl = '';
-  List<Peer> peers = [];
+  final FocusNode _idFocusNode = FocusNode();
+  final TextEditingController _idEditingController = TextEditingController();
 
-  bool isPeersLoading = false;
-  bool isPeersLoaded = false;
+  final AllPeersLoader _allPeersLoader = AllPeersLoader();
+
   StreamSubscription? _uniLinksSubscription;
 
   // https://github.com/flutter/flutter/issues/157244
@@ -62,6 +62,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
   @override
   void initState() {
     super.initState();
+    _allPeersLoader.init(setState);
+    _idFocusNode.addListener(onFocusChanged);
     if (_idController.text.isEmpty) {
       WidgetsBinding.instance.addPostFrameCallback((_) async {
         final lastRemoteId = await bind.mainGetLastRemoteId();
@@ -72,22 +74,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
         }
       });
     }
-    if (isAndroid) {
-      if (!bind.isCustomClient()) {
-        platformFFI.registerEventHandler(
-            kCheckSoftwareUpdateFinish, kCheckSoftwareUpdateFinish,
-            (Map<String, dynamic> evt) async {
-          if (evt['url'] is String) {
-            setState(() {
-              _updateUrl = evt['url'];
-            });
-          }
-        });
-        Timer(const Duration(seconds: 1), () async {
-          bind.mainGetSoftwareUpdateUrl();
-        });
-      }
-    }
+    Get.put<TextEditingController>(_idEditingController);
   }
 
   @override
@@ -97,7 +84,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
       slivers: [
         SliverList(
             delegate: SliverChildListDelegate([
-          if (!bind.isCustomClient()) _buildUpdateUI(),
+          if (!bind.isCustomClient() && !isIOS)
+            Obx(() => _buildUpdateUI(stateGlobal.updateUrl.value)),
           _buildRemoteIDTextField(),
         ])),
         SliverFillRemaining(
@@ -113,6 +101,20 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void onConnect() {
     var id = _idController.id;
     connect(context, id);
+  }
+
+  void onFocusChanged() {
+    _idEmpty.value = _idEditingController.text.isEmpty;
+    if (_idFocusNode.hasFocus) {
+      if (_allPeersLoader.needLoad) {
+        _allPeersLoader.getAllPeers();
+      }
+
+      final textLength = _idEditingController.value.text.length;
+      // Select all to facilitate removing text, just following the behavior of address input of chrome.
+      _idEditingController.selection =
+          TextSelection(baseOffset: 0, extentOffset: textLength);
+    }
   }
 
   /// UI for software update.
@@ -167,11 +169,12 @@ class _ConnectionPageState extends State<ConnectionPage> {
               Expanded(
                 child: Container(
                   padding: const EdgeInsets.only(left: 16, right: 16),
-                  child: Autocomplete<Peer>(
+                  child: RawAutocomplete<Peer>(
                     optionsBuilder: (TextEditingValue textEditingValue) {
                       if (textEditingValue.text == '') {
                         _autocompleteOpts = const Iterable<Peer>.empty();
-                      } else if (peers.isEmpty && !isPeersLoaded) {
+                      } else if (_allPeersLoader.peers.isEmpty &&
+                          !_allPeersLoader.isPeersLoaded) {
                         Peer emptyPeer = Peer(
                           id: '',
                           username: '',
@@ -185,6 +188,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                           rdpPort: '',
                           rdpUsername: '',
                           loginName: '',
+                          device_group_name: '',
                         );
                         _autocompleteOpts = [emptyPeer];
                       } else {
@@ -198,7 +202,7 @@ class _ConnectionPageState extends State<ConnectionPage> {
                         }
                         String textToFind = textEditingValue.text.toLowerCase();
 
-                        _autocompleteOpts = peers
+                        _autocompleteOpts = _allPeersLoader.peers
                             .where((peer) =>
                                 peer.id.toLowerCase().contains(textToFind) ||
                                 peer.username
@@ -212,25 +216,14 @@ class _ConnectionPageState extends State<ConnectionPage> {
                       }
                       return _autocompleteOpts;
                     },
+                    focusNode: _idFocusNode,
+                    textEditingController: _idEditingController,
                     fieldViewBuilder: (BuildContext context,
                         TextEditingController fieldTextEditingController,
                         FocusNode fieldFocusNode,
                         VoidCallback onFieldSubmitted) {
-                      fieldTextEditingController.text = _idController.text;
-                      Get.put<TextEditingController>(
-                          fieldTextEditingController);
-                      fieldFocusNode.addListener(() async {
-                        _idEmpty.value =
-                            fieldTextEditingController.text.isEmpty;
-                        if (fieldFocusNode.hasFocus && !isPeersLoading) {
-                          _fetchPeers();
-                        }
-                      });
-                      final textLength =
-                          fieldTextEditingController.value.text.length;
-                      // select all to facilitate removing text, just following the behavior of address input of chrome
-                      fieldTextEditingController.selection = TextSelection(
-                          baseOffset: 0, extentOffset: textLength);
+                      updateTextAndPreserveSelection(
+                          fieldTextEditingController, _idController.text);
                       return AutoSizeTextField(
                         controller: fieldTextEditingController,
                         focusNode: fieldFocusNode,
@@ -310,7 +303,9 @@ class _ConnectionPageState extends State<ConnectionPage> {
                                             maxHeight: maxHeight,
                                             maxWidth: 320,
                                           ),
-                                          child: peers.isEmpty && isPeersLoading
+                                          child: _allPeersLoader
+                                                      .peers.isEmpty &&
+                                                  !_allPeersLoader.isPeersLoaded
                                               ? Container(
                                                   height: 80,
                                                   child: Center(
@@ -373,15 +368,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
   void dispose() {
     _uniLinksSubscription?.cancel();
     _idController.dispose();
+    _idFocusNode.removeListener(onFocusChanged);
+    _allPeersLoader.clear();
+    _idFocusNode.dispose();
+    _idEditingController.dispose();
     if (Get.isRegistered<IDTextEditingController>()) {
       Get.delete<IDTextEditingController>();
     }
     if (Get.isRegistered<TextEditingController>()) {
       Get.delete<TextEditingController>();
-    }
-    if (!bind.isCustomClient()) {
-      platformFFI.unregisterEventHandler(
-          kCheckSoftwareUpdateFinish, kCheckSoftwareUpdateFinish);
     }
     super.dispose();
   }

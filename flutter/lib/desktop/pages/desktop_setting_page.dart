@@ -11,8 +11,11 @@ import 'package:flutter_hbb/common/widgets/setting_widgets.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_home_page.dart';
 import 'package:flutter_hbb/desktop/pages/desktop_tab_page.dart';
+import 'package:flutter_hbb/mobile/widgets/dialog.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
+import 'package:flutter_hbb/models/printer_model.dart';
 import 'package:flutter_hbb/models/server_model.dart';
+import 'package:flutter_hbb/models/state_model.dart';
 import 'package:flutter_hbb/plugin/manager.dart';
 import 'package:flutter_hbb/plugin/widgets/desktop_settings.dart';
 import 'package:get/get.dart';
@@ -53,6 +56,7 @@ enum SettingsTabKey {
   display,
   plugin,
   account,
+  printer,
   about,
 }
 
@@ -72,6 +76,7 @@ class DesktopSettingPage extends StatefulWidget {
     if (!isWeb && !bind.isIncomingOnly() && bind.pluginFeatureIsEnabled())
       SettingsTabKey.plugin,
     if (!bind.isDisableAccount()) SettingsTabKey.account,
+    if (isWindows) SettingsTabKey.printer,
     SettingsTabKey.about,
   ];
 
@@ -105,12 +110,19 @@ class DesktopSettingPage extends StatefulWidget {
 }
 
 class _DesktopSettingPageState extends State<DesktopSettingPage>
-    with TickerProviderStateMixin, AutomaticKeepAliveClientMixin {
+    with
+        TickerProviderStateMixin,
+        AutomaticKeepAliveClientMixin,
+        WidgetsBindingObserver {
   late PageController controller;
   late Rx<SettingsTabKey> selectedTab;
 
   @override
   bool get wantKeepAlive => true;
+
+  final RxBool _block = false.obs;
+  final RxBool _canBeBlocked = false.obs;
+  Timer? _videoConnTimer;
 
   _DesktopSettingPageState(SettingsTabKey initialTabkey) {
     var initialIndex = DesktopSettingPage.tabKeys.indexOf(initialTabkey);
@@ -132,10 +144,33 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    if (state == AppLifecycleState.resumed) {
+      shouldBeBlocked(_block, canBeBlocked);
+    }
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addObserver(this);
+    _videoConnTimer =
+        periodic_immediate(Duration(milliseconds: 1000), () async {
+      if (!mounted) {
+        return;
+      }
+      _canBeBlocked.value = await canBeBlocked();
+    });
+  }
+
+  @override
   void dispose() {
     super.dispose();
     Get.delete<PageController>(tag: _kSettingPageControllerTag);
     Get.delete<RxInt>(tag: _kSettingPageTabKeyTag);
+    WidgetsBinding.instance.removeObserver(this);
+    _videoConnTimer?.cancel();
   }
 
   List<_TabInfo> _settingTabs() {
@@ -165,6 +200,10 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         case SettingsTabKey.account:
           settingTabs.add(
               _TabInfo(tab, 'Account', Icons.person_outline, Icons.person));
+          break;
+        case SettingsTabKey.printer:
+          settingTabs
+              .add(_TabInfo(tab, 'Printer', Icons.print_outlined, Icons.print));
           break;
         case SettingsTabKey.about:
           settingTabs
@@ -197,6 +236,9 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
         case SettingsTabKey.account:
           children.add(const _Account());
           break;
+        case SettingsTabKey.printer:
+          children.add(const _Printer());
+          break;
         case SettingsTabKey.about:
           children.add(const _About());
           break;
@@ -205,12 +247,35 @@ class _DesktopSettingPageState extends State<DesktopSettingPage>
     return children;
   }
 
+  Widget _buildBlock({required List<Widget> children}) {
+    // check both mouseMoveTime and videoConnCount
+    return Obx(() {
+      final videoConnBlock =
+          _canBeBlocked.value && stateGlobal.videoConnCount > 0;
+      return Stack(children: [
+        buildRemoteBlock(
+          block: _block,
+          mask: false,
+          use: canBeBlocked,
+          child: preventMouseKeyBuilder(
+            child: Row(children: children),
+            block: videoConnBlock,
+          ),
+        ),
+        if (videoConnBlock)
+          Container(
+            color: Colors.black.withOpacity(0.5),
+          )
+      ]);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     super.build(context);
     return Scaffold(
       backgroundColor: Theme.of(context).colorScheme.background,
-      body: Row(
+      body: _buildBlock(
         children: <Widget>[
           SizedBox(
             width: _kTabWidth,
@@ -441,6 +506,16 @@ class _GeneralState extends State<_General> {
                   await bind.mainSetLocalOption(key: k, value: v ? 'Y' : 'N'),
             ),
           ),
+        if (isWindows)
+          Tooltip(
+            message: translate('d3d_render_tip'),
+            child: _OptionCheckBox(
+              context,
+              "Use D3D rendering",
+              kOptionD3DRender,
+              isServer: false,
+            ),
+          ),
         if (!isWeb && !bind.isCustomClient())
           _OptionCheckBox(
             context,
@@ -552,7 +627,6 @@ class _GeneralState extends State<_General> {
       bool user_dir_exists = await Directory(user_dir).exists();
       bool root_dir_exists =
           showRootDir ? await Directory(root_dir).exists() : false;
-      // canLaunchUrl blocked on windows portable, user SYSTEM
       return {
         'user_dir': user_dir,
         'root_dir': root_dir,
@@ -704,8 +778,8 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
               locked = false;
               setState(() => {});
             }),
-            AbsorbPointer(
-              absorbing: locked,
+            preventMouseKeyBuilder(
+              block: locked,
               child: Column(children: [
                 permissions(context),
                 password(context),
@@ -899,12 +973,18 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
             _OptionCheckBox(
                 context, 'Enable keyboard/mouse', kOptionEnableKeyboard,
                 enabled: enabled, fakeValue: fakeValue),
+            if (isWindows)
+              _OptionCheckBox(
+                  context, 'Enable remote printer', kOptionEnableRemotePrinter,
+                  enabled: enabled, fakeValue: fakeValue),
             _OptionCheckBox(context, 'Enable clipboard', kOptionEnableClipboard,
                 enabled: enabled, fakeValue: fakeValue),
             _OptionCheckBox(
                 context, 'Enable file transfer', kOptionEnableFileTransfer,
                 enabled: enabled, fakeValue: fakeValue),
             _OptionCheckBox(context, 'Enable audio', kOptionEnableAudio,
+                enabled: enabled, fakeValue: fakeValue),
+            _OptionCheckBox(context, 'Enable camera', kOptionEnableCamera,
                 enabled: enabled, fakeValue: fakeValue),
             _OptionCheckBox(
                 context, 'Enable TCP tunneling', kOptionEnableTunnel,
@@ -1134,7 +1214,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                       contentPadding:
                           EdgeInsets.symmetric(vertical: 12, horizontal: 12),
                     ),
-                  ).marginOnly(right: 15),
+                  ).workaroundFreezeLinuxMint().marginOnly(right: 15),
                 ),
                 Obx(() => ElevatedButton(
                       onPressed: applyEnabled.value &&
@@ -1291,7 +1371,7 @@ class _SafetyState extends State<_Safety> with AutomaticKeepAliveClientMixin {
                     contentPadding:
                         EdgeInsets.symmetric(vertical: 12, horizontal: 12),
                   ),
-                ).marginOnly(right: 15),
+                ).workaroundFreezeLinuxMint().marginOnly(right: 15),
               ),
               Obx(() => ElevatedButton(
                     onPressed:
@@ -1363,116 +1443,81 @@ class _NetworkState extends State<_Network> with AutomaticKeepAliveClientMixin {
   bool locked = !isWeb && bind.mainIsInstalled();
 
   final scrollController = ScrollController();
-  late final TextEditingController idController;
-  late final TextEditingController relayController;
-  late final TextEditingController apiController;
-  late final TextEditingController keyController;
-
-  @override
-  void initState() {
-    super.initState();
-    Map<String, dynamic> oldOptions = jsonDecode(bind.mainGetOptionsSync());
-    old(String key) {
-      return (oldOptions[key] ?? '').trim();
-    }
-
-    idController = TextEditingController(text: old('custom-rendezvous-server'));
-    relayController = TextEditingController(text: old('relay-server'));
-    apiController = TextEditingController(text: old('api-server'));
-    keyController = TextEditingController(text: old('key'));
-  }
 
   @override
   Widget build(BuildContext context) {
     super.build(context);
-    bool enabled = !locked;
-    final hideServer =
-        bind.mainGetBuildinOption(key: kOptionHideServerSetting) == 'Y';
-    // TODO: support web proxy
-    final hideProxy =
-        isWeb || bind.mainGetBuildinOption(key: kOptionHideProxySetting) == 'Y';
     return ListView(controller: scrollController, children: [
       _lock(locked, 'Unlock Network Settings', () {
         locked = false;
         setState(() => {});
       }),
-      AbsorbPointer(
-        absorbing: locked,
+      preventMouseKeyBuilder(
+        block: locked,
         child: Column(children: [
-          if (!hideServer) server(enabled),
-          if (!hideProxy)
-            _Card(title: 'Proxy', children: [
-              _Button('Socks5/Http(s) Proxy', changeSocks5Proxy,
-                  enabled: enabled),
-            ]),
+          network(context),
         ]),
       ),
     ]).marginOnly(bottom: _kListViewBottomMargin);
   }
 
-  server(bool enabled) {
-    // Simple temp wrapper for PR check
-    tmpWrapper() {
-      // Setting page is not modal, oldOptions should only be used when getting options, never when setting.
+  Widget network(BuildContext context) {
+    final hideServer =
+        bind.mainGetBuildinOption(key: kOptionHideServerSetting) == 'Y';
+    final hideProxy =
+        isWeb || bind.mainGetBuildinOption(key: kOptionHideProxySetting) == 'Y';
 
-      RxString idErrMsg = ''.obs;
-      RxString relayErrMsg = ''.obs;
-      RxString apiErrMsg = ''.obs;
-      final controllers = [
-        idController,
-        relayController,
-        apiController,
-        keyController,
-      ];
-      final errMsgs = [
-        idErrMsg,
-        relayErrMsg,
-        apiErrMsg,
-      ];
-
-      submit() async {
-        bool result = await setServerConfig(
-            null,
-            errMsgs,
-            ServerConfig(
-                idServer: idController.text,
-                relayServer: relayController.text,
-                apiServer: apiController.text,
-                key: keyController.text));
-        if (result) {
-          setState(() {});
-          showToast(translate('Successful'));
-        } else {
-          showToast(translate('Failed'));
-        }
-      }
-
-      bool secure = !enabled;
-      return _Card(
-          title: 'ID/Relay Server',
-          title_suffix: ServerConfigImportExportWidgets(controllers, errMsgs),
-          children: [
-            Column(
-              children: [
-                Obx(() => _LabeledTextField(context, 'ID Server', idController,
-                    idErrMsg.value, enabled, secure)),
-                if (!isWeb)
-                  Obx(() => _LabeledTextField(context, 'Relay Server',
-                      relayController, relayErrMsg.value, enabled, secure)),
-                Obx(() => _LabeledTextField(context, 'API Server',
-                    apiController, apiErrMsg.value, enabled, secure)),
-                _LabeledTextField(
-                    context, 'Key', keyController, '', enabled, secure),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
-                  children: [_Button('Apply', submit, enabled: enabled)],
-                ).marginOnly(top: 10),
-              ],
-            )
-          ]);
+    if (hideServer && hideProxy) {
+      return Offstage();
     }
 
-    return tmpWrapper();
+    return _Card(
+      title: 'Network',
+      children: [
+        Container(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              if (!hideServer)
+                ListTile(
+                  leading: Icon(Icons.dns_outlined, color: _accentColor),
+                  title: Text(
+                    translate('ID/Relay Server'),
+                    style: TextStyle(fontSize: _kContentFontSize),
+                  ),
+                  enabled: !locked,
+                  onTap: () => showServerSettings(gFFI.dialogManager),
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                  minLeadingWidth: 0,
+                  horizontalTitleGap: 10,
+                ),
+              if (!hideServer && !hideProxy)
+                Divider(height: 1, indent: 16, endIndent: 16),
+              if (!hideProxy)
+                ListTile(
+                  leading:
+                      Icon(Icons.network_ping_outlined, color: _accentColor),
+                  title: Text(
+                    translate('Socks5/Http(s) Proxy'),
+                    style: TextStyle(fontSize: _kContentFontSize),
+                  ),
+                  enabled: !locked,
+                  onTap: changeSocks5Proxy,
+                  shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10),
+                  ),
+                  contentPadding: EdgeInsets.symmetric(horizontal: 16),
+                  minLeadingWidth: 0,
+                  horizontalTitleGap: 10,
+                ),
+            ],
+          ),
+        ),
+      ],
+    );
   }
 }
 
@@ -1847,6 +1892,153 @@ class _PluginState extends State<_Plugin> {
                   ? loginDialog()
                   : logOutConfirmDialog()
             }));
+  }
+}
+
+class _Printer extends StatefulWidget {
+  const _Printer({super.key});
+
+  @override
+  State<_Printer> createState() => __PrinterState();
+}
+
+class __PrinterState extends State<_Printer> {
+  @override
+  Widget build(BuildContext context) {
+    final scrollController = ScrollController();
+    return ListView(controller: scrollController, children: [
+      outgoing(context),
+      incomming(context),
+    ]).marginOnly(bottom: _kListViewBottomMargin);
+  }
+
+  Widget outgoing(BuildContext context) {
+    final isSupportPrinterDriver =
+        bind.mainGetCommonSync(key: 'is-support-printer-driver') == 'true';
+
+    Widget tipOsNotSupported() {
+      return Align(
+        alignment: Alignment.topLeft,
+        child: Text(translate('printer-os-requirement-tip')),
+      ).marginOnly(left: _kCardLeftMargin);
+    }
+
+    Widget tipClientNotInstalled() {
+      return Align(
+        alignment: Alignment.topLeft,
+        child:
+            Text(translate('printer-requires-installed-{$appName}-client-tip')),
+      ).marginOnly(left: _kCardLeftMargin);
+    }
+
+    Widget tipPrinterNotInstalled() {
+      final failedMsg = ''.obs;
+      platformFFI.registerEventHandler(
+          'install-printer-res', 'install-printer-res', (evt) async {
+        if (evt['success'] as bool) {
+          setState(() {});
+        } else {
+          failedMsg.value = evt['msg'] as String;
+        }
+      }, replace: true);
+      return Column(children: [
+        Obx(
+          () => failedMsg.value.isNotEmpty
+              ? Offstage()
+              : Align(
+                  alignment: Alignment.topLeft,
+                  child: Text(translate('printer-{$appName}-not-installed-tip'))
+                      .marginOnly(bottom: 10.0),
+                ),
+        ),
+        Obx(
+          () => failedMsg.value.isEmpty
+              ? Offstage()
+              : Align(
+                  alignment: Alignment.topLeft,
+                  child: Text(failedMsg.value,
+                          style: DefaultTextStyle.of(context)
+                              .style
+                              .copyWith(color: Colors.red))
+                      .marginOnly(bottom: 10.0)),
+        ),
+        _Button('Install {$appName} Printer', () {
+          failedMsg.value = '';
+          bind.mainSetCommon(key: 'install-printer', value: '');
+        })
+      ]).marginOnly(left: _kCardLeftMargin, bottom: 2.0);
+    }
+
+    Widget tipReady() {
+      return Align(
+        alignment: Alignment.topLeft,
+        child: Text(translate('printer-{$appName}-ready-tip')),
+      ).marginOnly(left: _kCardLeftMargin);
+    }
+
+    final installed = bind.mainIsInstalled();
+    // `is-printer-installed` may fail, but it's rare case.
+    // Add additional error message here if it's really needed.
+    final driver_installed =
+        bind.mainGetCommonSync(key: 'is-printer-installed') == 'true';
+
+    final List<Widget> children = [];
+    if (!isSupportPrinterDriver) {
+      children.add(tipOsNotSupported());
+    } else {
+      children.addAll([
+        if (!installed) tipClientNotInstalled(),
+        if (installed && !driver_installed) tipPrinterNotInstalled(),
+        if (installed && driver_installed) tipReady()
+      ]);
+    }
+    return _Card(title: 'Outgoing Print Jobs', children: children);
+  }
+
+  Widget incomming(BuildContext context) {
+    onRadioChanged(String value) async {
+      await bind.mainSetLocalOption(
+          key: kKeyPrinterIncommingJobAction, value: value);
+      setState(() {});
+    }
+
+    PrinterOptions printerOptions = PrinterOptions.load();
+    return _Card(title: 'Incomming Print Jobs', children: [
+      _Radio(context,
+          value: kValuePrinterIncomingJobDismiss,
+          groupValue: printerOptions.action,
+          label: 'Dismiss',
+          onChanged: onRadioChanged),
+      _Radio(context,
+          value: kValuePrinterIncomingJobDefault,
+          groupValue: printerOptions.action,
+          label: 'use-the-default-printer-tip',
+          onChanged: onRadioChanged),
+      _Radio(context,
+          value: kValuePrinterIncomingJobSelected,
+          groupValue: printerOptions.action,
+          label: 'use-the-selected-printer-tip',
+          onChanged: onRadioChanged),
+      if (printerOptions.printerNames.isNotEmpty)
+        ComboBox(
+          initialKey: printerOptions.printerName,
+          keys: printerOptions.printerNames,
+          values: printerOptions.printerNames,
+          enabled: printerOptions.action == kValuePrinterIncomingJobSelected,
+          onChanged: (value) async {
+            await bind.mainSetLocalOption(
+                key: kKeyPrinterSelected, value: value);
+            setState(() {});
+          },
+        ).marginOnly(left: 10),
+      _OptionCheckBox(
+        context,
+        'auto-print-tip',
+        kKeyPrinterAllowAutoPrint,
+        isServer: false,
+        enabled: printerOptions.action != kValuePrinterIncomingJobDismiss,
+      )
+    ]);
   }
 }
 
@@ -2292,7 +2484,7 @@ _LabeledTextField(
             style: TextStyle(
               color: disabledTextColor(context, enabled),
             ),
-          ),
+          ).workaroundFreezeLinuxMint(),
         ],
       ),
     ],
@@ -2471,7 +2663,7 @@ void changeSocks5Proxy() async {
                     controller: proxyController,
                     autofocus: true,
                     enabled: !isOptFixed,
-                  ),
+                  ).workaroundFreezeLinuxMint(),
                 ),
               ],
             ).marginOnly(bottom: 8),
@@ -2491,7 +2683,7 @@ void changeSocks5Proxy() async {
                       labelText: isMobile ? translate('Username') : null,
                     ),
                     enabled: !isOptFixed,
-                  ),
+                  ).workaroundFreezeLinuxMint(),
                 ),
               ],
             ).marginOnly(bottom: 8),
@@ -2517,7 +2709,7 @@ void changeSocks5Proxy() async {
                         controller: pwdController,
                         enabled: !isOptFixed,
                         maxLength: bind.mainMaxEncryptLen(),
-                      )),
+                      ).workaroundFreezeLinuxMint()),
                 ),
               ],
             ),
